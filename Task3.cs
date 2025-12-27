@@ -9,46 +9,46 @@ namespace lab5_1
 {
     public class Task3
     {
-        public static void ExecuteBackupProcedure()
+        public static void ExecuteBackupProcess()
         {
-            string sourcePath = @"F:\SourceFolder";
-            string backupBasePath = @"F:\BackupFolder";
+            string sourceDirectory = @"B:\test";
+            string backupRootDirectory = @"B:\BackupFolder";
 
-            if (!Directory.Exists(sourcePath))
-            {
-                Console.WriteLine("Ошибка: исходная директория не существует.");
+            if (!ValidateSourceDirectory(sourceDirectory))
                 return;
-            }
 
-            InitializeBackupDirectory(backupBasePath);
+            EnsureBackupRootExists(backupRootDirectory);
 
-            int latestVersion = DiscoverLatestVersion(backupBasePath);
-            int nextVersionNumber = latestVersion + 1;
+            int nextVersionNumber = DetermineNextVersionNumber(backupRootDirectory);
 
-            bool modificationsDetected = false;
+            bool backupNeeded = ShouldCreateBackup(sourceDirectory, backupRootDirectory, nextVersionNumber);
 
-            if (latestVersion > 0)
+            if (backupNeeded)
             {
-                string previousBackupPath = Path.Combine(backupBasePath, latestVersion.ToString());
-                modificationsDetected = CompareWithPreviousBackup(sourcePath, previousBackupPath);
+                CreateBackupWithSubdirectories(sourceDirectory, backupRootDirectory, nextVersionNumber);
+                Console.WriteLine($"Создана резервная копия версии {nextVersionNumber} с сохранением структуры папок");
             }
             else
             {
-                modificationsDetected = true;
-            }
-
-            if (modificationsDetected)
-            {
-                PerformBackupCreation(sourcePath, backupBasePath, nextVersionNumber);
-                Console.WriteLine($"Создана резервная копия версии {nextVersionNumber}");
-            }
-            else
-            {
-                Console.WriteLine("Резервное копирование не требуется - файлы идентичны.");
+                Console.WriteLine("Изменений не обнаружено, резервное копирование не требуется.");
             }
         }
+        /// <summary>
+        /// Метод проверки директории
+        /// </summary>
+        /// <param name="sourcePath"></param>
+        /// <returns></returns>
+        private static bool ValidateSourceDirectory(string sourcePath)
+        {
+            if (!Directory.Exists(sourcePath))
+            {
+                Console.WriteLine($"Ошибка: исходная директория '{sourcePath}' не найдена.");
+                return false;
+            }
+            return true;
+        }
 
-        private static void InitializeBackupDirectory(string backupPath)
+        private static void EnsureBackupRootExists(string backupPath)
         {
             if (!Directory.Exists(backupPath))
             {
@@ -56,95 +56,183 @@ namespace lab5_1
             }
         }
 
-        private static int DiscoverLatestVersion(string backupRoot)
+        private static int DetermineNextVersionNumber(string backupRoot)
         {
             if (!Directory.Exists(backupRoot))
-                return 0;
+                return 1;
 
-            var versionDirectories = Directory.GetDirectories(backupRoot)
-                .Select(dir => Path.GetFileName(dir))
+            var versionFolders = Directory.GetDirectories(backupRoot)
+                .Select(folder => Path.GetFileName(folder))
                 .Where(name => int.TryParse(name, out _))
-                .Select(name => int.Parse(name))
-                .ToArray();
+                .Select(name => int.Parse(name));
 
-            return versionDirectories.Length > 0 ? versionDirectories.Max() : 0;
+            return versionFolders.Any() ? versionFolders.Max() + 1 : 1;
         }
 
-        private static bool CompareWithPreviousBackup(string currentSource, string previousBackup)
+        private static bool ShouldCreateBackup(string sourcePath, string backupRoot, int nextVersion)
         {
-            var currentFiles = CollectFileInformation(currentSource);
-            var previousFiles = CollectFileInformation(previousBackup);
-
-            if (currentFiles.Count != previousFiles.Count)
+            if (nextVersion == 1)
                 return true;
 
-            foreach (var fileEntry in currentFiles)
+            string previousVersionPath = Path.Combine(backupRoot, (nextVersion - 1).ToString());
+
+            if (!Directory.Exists(previousVersionPath))
+                return true;
+
+            return AreDirectoriesDifferent(sourcePath, previousVersionPath);
+        }
+        /// <summary>
+        /// Метод сравнения файлов
+        /// </summary>
+        /// <param name="sourceDir"></param>
+        /// <param name="backupDir"></param>
+        /// <returns></returns>
+        private static bool AreDirectoriesDifferent(string sourceDir, string backupDir)
+        {
+            var sourceFiles = GetAllFilesWithRelativePaths(sourceDir);
+            var backupFiles = GetAllFilesWithRelativePaths(backupDir);
+
+            if (sourceFiles.Count != backupFiles.Count)
+                return true;
+
+            using var md5 = MD5.Create();
+
+            foreach (var sourceFile in sourceFiles)
             {
-                if (!previousFiles.TryGetValue(fileEntry.Key, out string previousHash))
+                string relativePath = sourceFile.Key;
+
+                if (!backupFiles.ContainsKey(relativePath))
                     return true;
 
-                if (fileEntry.Value != previousHash)
+                string sourceFullPath = Path.Combine(sourceDir, relativePath);
+                string backupFullPath = Path.Combine(backupDir, relativePath);
+
+                if (!CompareFilesByHash(sourceFullPath, backupFullPath, md5))
                     return true;
             }
 
             return false;
         }
-
-        private static Dictionary<string, string> CollectFileInformation(string directoryPath)
+        /// <summary>
+        /// Новый метод для получения файлов с путями
+        /// </summary>
+        /// <param name="rootDirectory"></param>
+        /// <returns></returns>
+        private static Dictionary<string, FileInfo> GetAllFilesWithRelativePaths(string rootDirectory)
         {
-            var fileDetails = new Dictionary<string, string>();
+            var fileDictionary = new Dictionary<string, FileInfo>();
 
-            if (!Directory.Exists(directoryPath))
-                return fileDetails;
+            if (!Directory.Exists(rootDirectory))
+                return fileDictionary;
 
-            string[] files = Directory.GetFiles(directoryPath);
+            string[] allFiles = Directory.GetFiles(rootDirectory, "*.*", SearchOption.AllDirectories);
 
-            using MD5 hashAlgorithm = MD5.Create();
-
-            foreach (string filePath in files)
+            foreach (string filePath in allFiles)
             {
-                string fileName = Path.GetFileName(filePath);
-                string fileHash = CalculateFileHash(filePath, hashAlgorithm);
-                fileDetails[fileName] = fileHash;
+                string relativePath = GetRelativePath(rootDirectory, filePath);
+                var fileInfo = new FileInfo(filePath);
+                fileDictionary[relativePath] = fileInfo;
             }
 
-            return fileDetails;
+            return fileDictionary;
+        }
+
+        private static string GetRelativePath(string rootPath, string fullPath)
+        {
+            Uri rootUri = new Uri(rootPath + Path.DirectorySeparatorChar);
+            Uri fileUri = new Uri(fullPath);
+            return Uri.UnescapeDataString(rootUri.MakeRelativeUri(fileUri).ToString());
+        }
+
+        private static bool CompareFilesByHash(string filePath1, string filePath2, MD5 hasher)
+        {
+            try
+            {
+                if (!File.Exists(filePath1) || !File.Exists(filePath2))
+                    return false;
+
+                string hash1 = CalculateFileHash(filePath1, hasher);
+                string hash2 = CalculateFileHash(filePath2, hasher);
+
+                return hash1 == hash2;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         private static string CalculateFileHash(string filePath, MD5 hasher)
         {
-            try
-            {
-                using FileStream fileStream = File.OpenRead(filePath);
-                byte[] hashBytes = hasher.ComputeHash(fileStream);
-                return Convert.ToHexString(hashBytes);
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Ошибка при вычислении хеша файла {filePath}: {ex.Message}");
-                return string.Empty;
-            }
+            using var fileStream = File.OpenRead(filePath);
+            byte[] hashBytes = hasher.ComputeHash(fileStream);
+            return BitConverter.ToString(hashBytes).Replace("-", "").ToLowerInvariant();
         }
-
-        private static void PerformBackupCreation(string sourceDir, string backupDir, int version)
+        /// <summary>
+        /// Метод создания бэкапа
+        /// </summary>
+        /// <param name="sourceDir"></param>
+        /// <param name="backupRoot"></param>
+        /// <param name="version"></param>
+        private static void CreateBackupWithSubdirectories(string sourceDir, string backupRoot, int version)
         {
-            string versionDirectory = Path.Combine(backupDir, version.ToString());
+            string versionDirectory = Path.Combine(backupRoot, version.ToString());
 
             try
             {
-                Directory.CreateDirectory(versionDirectory);
+                Console.WriteLine($"Начало создания резервной копии версии {version}...");
 
-                foreach (string sourceFile in Directory.GetFiles(sourceDir))
-                {
-                    string destinationFile = Path.Combine(versionDirectory, Path.GetFileName(sourceFile));
-                    File.Copy(sourceFile, destinationFile);
-                }
+                int copiedFiles = CopyDirectoryRecursive(sourceDir, versionDirectory);
+
+                Console.WriteLine($"Резервная копия создана успешно. Скопировано файлов: {copiedFiles}");
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"Ошибка при создании резервной копии: {ex.Message}");
+
+                // Попытка удалить частично созданную папку при ошибке
+                try
+                {
+                    if (Directory.Exists(versionDirectory))
+                    {
+                        Directory.Delete(versionDirectory, true);
+                    }
+                }
+                catch
+                {
+                    // Игнорируем ошибки при удалении
+                }
+
                 throw;
             }
+        }
+
+        private static int CopyDirectoryRecursive(string sourceDir, string targetDir)
+        {
+            if (!Directory.Exists(sourceDir))
+                return 0;
+
+            Directory.CreateDirectory(targetDir);
+            int fileCount = 0;
+
+            // Копируем все файлы из текущей директории
+            foreach (string sourceFile in Directory.GetFiles(sourceDir))
+            {
+                string fileName = Path.GetFileName(sourceFile);
+                string targetFile = Path.Combine(targetDir, fileName);
+                File.Copy(sourceFile, targetFile, true);
+                fileCount++;
+            }
+
+            // Рекурсивно копируем поддиректории
+            foreach (string sourceSubDir in Directory.GetDirectories(sourceDir))
+            {
+                string dirName = Path.GetFileName(sourceSubDir);
+                string targetSubDir = Path.Combine(targetDir, dirName);
+                fileCount += CopyDirectoryRecursive(sourceSubDir, targetSubDir);
+            }
+
+            return fileCount;
         }
     }
 }
